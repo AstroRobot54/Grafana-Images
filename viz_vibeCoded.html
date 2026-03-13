@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <script src="https://cesium.com/downloads/cesiumjs/releases/1.105/Build/Cesium/Cesium.js"></script>
+  <link href="https://cesium.com/downloads/cesiumjs/releases/1.105/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/satellite.js/4.0.0/satellite.min.js"></script>
+  <style>
+    body, html, #cesiumContainer { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; background: #000; }
+    #toolbar { position: absolute; top: 10px; left: 10px; background: rgba(0, 0, 0, 0.8); padding: 12px; border-radius: 6px; color: white; z-index: 10; font-family: monospace; border: 1px solid #444; }
+    .cesium-viewer-bottom { display: none !important; } 
+  </style>
+</head>
+<body>
+  <div id="toolbar"><b>SATELLITE 3D</b><br>ID: 25544 (ISS)</div>
+  <div id="cesiumContainer"></div>
+
+  <script>
+    Cesium.Ion.defaultAccessToken = null; 
+
+    async function init() {
+      const arcGisLayer = await Cesium.ArcGisMapServerImageryProvider.fromUrl(
+        'https://services.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer'
+      );
+
+      const viewer = new Cesium.Viewer('cesiumContainer', {
+        baseLayer: new Cesium.ImageryLayer(arcGisLayer),
+        baseLayerPicker: false, geocoder: false, homeButton: false, infoBox: false,
+        navigationHelpButton: false, sceneModePicker: false, timeline: false, animation: false
+      });
+
+      async function track() {
+        try {
+          const res = await fetch('https://celestrak.org/NORAD/elements/gp.php?CATNR=25544&FORMAT=TLE');
+          const data = await res.text();
+          const lines = data.split('\n');
+          if(lines.length < 3) return;
+
+          const satrec = satellite.twoline2satrec(lines[1], lines[2]);
+          
+          const positionProperty = new Cesium.CallbackProperty((time, result) => {
+            const now = Cesium.JulianDate.toDate(time);
+            const pV = satellite.propagate(satrec, now);
+            const gmst = satellite.gstime(now);
+            const pG = satellite.eciToGeodetic(pV.position, gmst);
+            return Cesium.Cartesian3.fromRadians(pG.longitude, pG.latitude, pG.height * 1000, Cesium.Ellipsoid.WGS84, result);
+          }, false);
+
+          const entity = viewer.entities.add({
+            position: positionProperty,
+            orientation: new Cesium.VelocityOrientationProperty(positionProperty),
+            // BOX FALLBACK: If the model fails, you'll still see this cyan box
+            box: {
+                dimensions: new Cesium.Cartesian3(50000.0, 50000.0, 50000.0), // Size in meters (made large to be visible)
+                material: Cesium.Color.CYAN.withAlpha(0.5),
+                outline: true,
+                outlineColor: Cesium.Color.WHITE
+            },
+            model: {
+              // Using a verified sample model from the glTF repository
+              uri: 'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/BoxAnimated/glTF-Binary/BoxAnimated.glb', 
+              minimumPixelSize: 128,
+              maximumScale: 1000
+            },
+            label: { 
+              text: 'ISS ACTIVE', 
+              font: '10pt monospace', 
+              style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+              outlineWidth: 2,
+              verticalOrigin: Cesium.VerticalOrigin.BOTTOM, 
+              pixelOffset: new Cesium.Cartesian2(0, -60) 
+            }
+          });
+          
+          viewer.trackedEntity = entity;
+
+          // Draw Orbit
+          const orbitPoints = [];
+          for (let i = 0; i < 95; i++) {
+            const time = new Date(new Date().getTime() + i * 60000);
+            const pV = satellite.propagate(satrec, time);
+            const gmst = satellite.gstime(time);
+            const pG = satellite.eciToGeodetic(pV.position, gmst);
+            orbitPoints.push(Cesium.Cartesian3.fromRadians(pG.longitude, pG.latitude, pG.height * 1000));
+          }
+
+          viewer.entities.add({
+            polyline: {
+              positions: orbitPoints,
+              width: 2,
+              material: Cesium.Color.CYAN.withAlpha(0.4)
+            }
+          });
+
+        } catch (e) {
+          console.error("Tracking error:", e);
+        }
+      }
+      track();
+    }
+
+    init();
+  </script>
+</body>
+</html>
